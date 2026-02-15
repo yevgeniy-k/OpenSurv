@@ -11,12 +11,14 @@ import time
 import urllib.request, urllib.error, urllib.parse
 from urllib.parse import urlparse
 
+from core.util.config import cfg
+
 logger = logging.getLogger('l_default')
 
 
 class Stream:
     """This class makes a stream an object"""
-    def __init__(self, name, stream, background_drawinstance, xdisplay_id,monitor_number,monitor_x_offset,monitor_y_offset):
+    def __init__(self, name, stream, background_drawinstance, xdisplay_id,monitor_number,monitor_x_offset,monitor_y_offset,monitor_scale=1.0):
         self.name = name
         self.worker = None
         self.stream_started = False
@@ -24,6 +26,7 @@ class Stream:
         self.monitor_number = monitor_number
         self.monitor_x_offset = monitor_x_offset
         self.monitor_y_offset = monitor_y_offset
+        self.monitor_scale = float(monitor_scale or 1.0)
         self.background_drawinstance = background_drawinstance
         self.streamprocess = None
         self.mpv_extra_options = ""
@@ -42,8 +45,8 @@ class Stream:
         self.mpv_extra_options = self.mpv_extra_options + ' ' + self.freeform_advanced_mpv_options
         self.mpv_loop = ""
         self.parsed=urlparse(self.url)
-        self.port = self.parsed.port
         self.scheme = self.parsed.scheme
+        self.port = self.parsed.port
         self.hostname = self.parsed.hostname
         self.obfuscated_credentials_url = '{}://{}'.format(self.scheme, self.hostname)
         #Handle no port given
@@ -61,7 +64,13 @@ class Stream:
         if self.scheme == "file":
             self.mpv_loop = "--loop"
 
-        if self.scheme not in ["rtsp", "http", "https", "file", "rtmp"]:
+        advanced_cfg = cfg.get('advanced', {}) if isinstance(cfg, dict) else {}
+        self.ffprobe_binary = stream.get('ffprobe_path') or advanced_cfg.get('ffprobe_path') or 'ffprobe'
+        self.ffprobe_available = True
+        default_mpv_binary = 'mpv' if os.name == 'nt' else '/usr/bin/mpv'
+        self.mpv_binary = stream.get('mpv_path') or advanced_cfg.get('mpv_path') or default_mpv_binary
+
+        if self.scheme not in ["rtsp", "http", "https", "file", "rtmp", "srt"]:
             logger.error("Stream: " + self.name + " Scheme " + self.scheme + " in " + self.obfuscated_credentials_url + " is currently not supported, you can make a feature request on https://community.opensurv.net")
             sys.exit()
         logger.debug(f'Stream: {self.name} object initialised with {stream}, {self.background_drawinstance}, {self.xdisplay_id}')
@@ -103,16 +112,25 @@ class Stream:
             return urllib.request.urlopen(request, timeout=self.probe_timeout)
 
     def is_connectable(self):
-        if self.scheme == "rtmp":
+        if self.scheme in ["rtmp", ]:
+            if not self.ffprobe_available:
+                return True
             try:
-                ffprobeoutput = subprocess.check_output(['/usr/bin/ffprobe', '-v', 'quiet', "-print_format", "flat", "-show_error", self.url], text=True, timeout=self.probe_timeout)
+                ffprobeoutput = subprocess.check_output([self.ffprobe_binary, '-v', 'quiet', "-print_format", "flat", "-show_error", self.url], text=True, timeout=self.probe_timeout)
                 return True
             except subprocess.TimeoutExpired as e:
                 logger.error(f"Stream: is_connectable: {self.name} {self.obfuscated_credentials_url} Not Connectable (ffprobe timed out, try increasing probe_timeout for this stream), configured timeout: {self.probe_timeout}")
                 return False
+            except FileNotFoundError:
+                if self.ffprobe_available:
+                    logger.warning("Stream: is_connectable: %s %s skipping ffprobe (executable '%s' not found). Set advanced.ffprobe_path or per-stream ffprobe_path to enable probing.", self.name, self.obfuscated_credentials_url, self.ffprobe_binary)
+                self.ffprobe_available = False
+                return True
             except Exception as e:
-                erroroutput_newlinesremoved=e.output.replace('\n', ' ')
-                logger.error(f"Stream: is_connectable: {self.name} {self.obfuscated_credentials_url} Not Connectable ({erroroutput_newlinesremoved}), configured timeout: {self.probe_timeout}")
+                error_output = getattr(e, 'output', repr(e))
+                if isinstance(error_output, str):
+                    error_output = error_output.replace('\n', ' ')
+                logger.error(f"Stream: is_connectable: {self.name} {self.obfuscated_credentials_url} Not Connectable ({error_output}), configured timeout: {self.probe_timeout}")
                 return False
         if self.scheme == "rtsp":
             try:
@@ -183,19 +201,26 @@ class Stream:
         logger.debug(f"Stream: {self.name}: hide stream")
         #Saving this state for as watchdog needs to restart stream
         self.hidden = True
-        subprocess.run(['wmctrl', '-r', self.name, '-b', 'add,hidden'])
+        if os.name != 'nt':
+            subprocess.run(['wmctrl', '-r', self.name, '-b', 'add,hidden'])
+        else:
+            self._apply_windows_geometry(make_visible=False)
     def unhide(self):
         """This function is needed for internal caching handling"""
         logger.debug(f"Stream: {self.name}: unhide stream")
         #Saving this state for as watchdog needs to restart stream
         self.hidden = False
         self.show_status()
-        subprocess.run(['wmctrl', '-r', self.name, '-b', 'remove,hidden'])
+        if os.name != 'nt':
+            subprocess.run(['wmctrl', '-r', self.name, '-b', 'remove,hidden'])
+        else:
+            self._apply_windows_geometry(make_visible=True)
     def _show_on_top(self):
         """This is toggle set by user config"""
         logger.debug(f"Stream: {self.name}: show stream on top")
         self.unhide()
-        subprocess.run(['wmctrl', '-r', self.name, '-b', 'add,above'])
+        if os.name != 'nt':
+            subprocess.run(['wmctrl', '-r', self.name, '-b', 'add,above'])
     def _get_aspect_ratio_from_coordinates(self):
         '''
             You need to tell vlc the aspect ratio of the source, so it can fill the complete window (i.e. remove any black bars)
@@ -218,49 +243,178 @@ class Stream:
         # y2 #y coordinate from where window should end, count from top to bottom of screen
         width = int(self.coordinates[2] - self.coordinates[0])
         height = int(self.coordinates[3] - self.coordinates[1])
-        x = (int(self.coordinates[0]))
-        y = (int(self.coordinates[1]))
+        x = int(self.coordinates[0])
+        y = int(self.coordinates[1])
+
+        try:
+            x_offset = int(self.monitor_x_offset)
+        except (TypeError, ValueError):
+            x_offset = 0
+            logger.debug(f"Stream: {self.name}: _convert_to_mpv_coordinates: invalid x offset '{self.monitor_x_offset}', defaulting to zero")
+        try:
+            y_offset = int(self.monitor_y_offset)
+        except (TypeError, ValueError):
+            y_offset = 0
+            logger.debug(f"Stream: {self.name}: _convert_to_mpv_coordinates: invalid y offset '{self.monitor_y_offset}', defaulting to zero")
+
+        x += x_offset
+        y += y_offset
+
         return str(width) + "x" + str(height) + "+" + str(x) + "+" + str(y)
     def _construct_audio_argument(self):
         if not self.enableaudio:
             return "--no-audio"
-    def _wait_for_window_to_be_initialized(self):
-      """
-      This functions waits until wmctrl sees the window, this is needed so following up wmctrl commands succeed"
-      """
-      logger.debug(f"Stream: {self.name}: _wait_for_window_to_be_initialized")
-      window_found = False
-      attempts = 0
-      #This is the timeout in seconds
-      max_attempts = self.timeout_waiting_for_init_stream * 2
-      time.sleep(0.5)
-      while not window_found and attempts < max_attempts:
-        result = subprocess.run(["wmctrl", "-l"], capture_output=True, text=True)
-        if self.name in result.stdout:
-          window_found = True
-          logger.debug(f"Stream: {self.name}: _wait_for_window_to_be_initialized, window found ({attempts}/{max_attempts})")
-        else:
-          logger.debug(f"Stream: {self.name}: _wait_for_window_to_be_initialized, window not present ({attempts}/{max_attempts})")
-          time.sleep(0.5)  # Wait for 500ms before checking again
-          attempts += 1
 
-      if not window_found:
-        logger.error(f"Stream: {self.name}: _wait_for_window_to_be_initialized, window not found ({attempts}/{max_attempts}. Stopping attempt")
+    def _wait_for_window_to_be_initialized(self):
+        """
+        This functions waits until wmctrl sees the window, this is needed so following up wmctrl commands succeed"
+        """
+        logger.debug(f"Stream: {self.name}: _wait_for_window_to_be_initialized")
+        if os.name == 'nt':
+            logger.debug(f"Stream: {self.name}: _wait_for_window_to_be_initialized using win32gui on Windows")
+            try:
+                import win32gui
+            except ImportError:
+                logger.warning(
+                    "Stream: %s: win32gui not available, cannot wait for window initialization on Windows",
+                    self.name,
+                )
+                return
+
+            attempts = 0
+            max_attempts = self.timeout_waiting_for_init_stream * 2
+            time.sleep(0.5)
+            while attempts < max_attempts:
+                hwnd = win32gui.FindWindow(None, self.name)
+                if hwnd:
+                    logger.debug(
+                        "Stream: %s: _wait_for_window_to_be_initialized, window found (%s/%s)",
+                        self.name,
+                        attempts,
+                        max_attempts,
+                    )
+                    return
+                logger.debug(
+                    "Stream: %s: _wait_for_window_to_be_initialized, window not present (%s/%s)",
+                    self.name,
+                    attempts,
+                    max_attempts,
+                )
+                time.sleep(0.5)
+                attempts += 1
+
+            logger.error(
+                "Stream: %s: _wait_for_window_to_be_initialized, window not found (%s/%s).",
+                self.name,
+                attempts,
+                max_attempts,
+            )
+            return
+        window_found = False
+        attempts = 0
+        #This is the timeout in seconds
+        max_attempts = self.timeout_waiting_for_init_stream * 2
+        time.sleep(0.5)
+        while not window_found and attempts < max_attempts:
+            result = subprocess.run(["wmctrl", "-l"], capture_output=True, text=True)
+            if self.name in result.stdout:
+                window_found = True
+                logger.debug(f"Stream: {self.name}: _wait_for_window_to_be_initialized, window found ({attempts}/{max_attempts})")
+            else:
+                logger.debug(f"Stream: {self.name}: _wait_for_window_to_be_initialized, window not present ({attempts}/{max_attempts})")
+                time.sleep(0.5)  # Wait for 500ms before checking again
+                attempts += 1
+
+        if not window_found:
+            logger.error(f"Stream: {self.name}: _wait_for_window_to_be_initialized, window not found ({attempts}/{max_attempts}. Stopping attempt")
+    def _apply_windows_geometry(self, make_visible=None):
+        if os.name != 'nt':
+            return
+        try:
+            import win32gui
+            import win32con
+        except ImportError:
+            logger.warning(
+                "Stream: %s: pywin32 not available, cannot enforce window geometry on Windows",
+                self.name,
+            )
+            return
+
+        make_visible = make_visible if make_visible is not None else not self.hidden
+
+        width = int(self.coordinates[2] - self.coordinates[0])
+        height = int(self.coordinates[3] - self.coordinates[1])
+        try:
+            x = int(self.coordinates[0]) + int(float(self.monitor_x_offset))
+        except (TypeError, ValueError):
+            x = int(self.coordinates[0])
+        try:
+            y = int(self.coordinates[1]) + int(float(self.monitor_y_offset))
+        except (TypeError, ValueError):
+            y = int(self.coordinates[1])
+
+        # Single non-blocking lookup; the watchdog will retry on the next cycle
+        # if the window hasn't appeared yet.
+        hwnd = win32gui.FindWindow(None, self.name)
+        if not hwnd:
+            logger.debug(
+                "Stream: %s: _apply_windows_geometry: window not found yet, will retry later",
+                self.name,
+            )
+            return
+
+        logger.debug(
+            "Stream: %s: _apply_windows_geometry %s window at %sx%s+%s+%s (hwnd=%s)",
+            self.name,
+            "show" if make_visible else "hide",
+            width,
+            height,
+            x,
+            y,
+            hwnd,
+        )
+        flags = win32con.SWP_NOOWNERZORDER
+        zorder = win32con.HWND_TOPMOST if (self.showontop or make_visible) else win32con.HWND_BOTTOM
+        # Apply multiple times to avoid race conditions where mpv repositions itself after spawn.
+        for attempt in range(3):
+            if make_visible:
+                win32gui.ShowWindow(hwnd, win32con.SW_SHOWNOACTIVATE)
+                flags_with_show = flags | win32con.SWP_SHOWWINDOW | win32con.SWP_NOACTIVATE
+                win32gui.SetWindowPos(hwnd, zorder, x, y, width, height, flags_with_show)
+            else:
+                win32gui.ShowWindow(hwnd, win32con.SW_HIDE)
+                flags_with_hide = flags | win32con.SWP_HIDEWINDOW | win32con.SWP_NOACTIVATE
+                win32gui.SetWindowPos(hwnd, zorder, x, y, width, height, flags_with_hide)
+            if attempt < 2:
+                time.sleep(0.2)
 
     def run_stream_watchdog(self):
-      """
-      This function watches if the process is still alive and if not attempts to restart it
-      """
-      logger.debug(f"Stream: {self.name}: run_stream_watchdog: Starting watchdog")
-      if self.stream_started:
-        if self.streamprocess.poll() != None:
-          self.streamprocess.communicate(input="\n".encode())
-          logger.error(f"Stream: {self.name}: run_stream_watchdog: is not responding trying to restart")
-          self.restart_stream()
+        """
+        This function watches if the process is still alive and if not attempts to restart it
+        """
+        logger.debug(f"Stream: {self.name}: run_stream_watchdog: Starting watchdog")
+        if self.stream_started:
+            if self.streamprocess is None:
+                logger.error(f"Stream: {self.name}: run_stream_watchdog: stream_started but no process handle")
+                return
+            returncode = self.streamprocess.poll()
+            if returncode is not None:
+                logger.error(
+                    f"Stream: {self.name}: run_stream_watchdog: detected exit code {returncode}, restarting"
+                )
+                self.streamprocess.communicate(input="\n".encode())
+                self.restart_stream()
+            else:
+                logger.debug(
+                    f"Stream: {self.name}: run_stream_watchdog: OK (pid {self.streamprocess.pid})"
+                )
+                # Re-apply window geometry/visibility on Windows to fix
+                # late-appearing or restarted windows that missed initial placement.
+                if os.name == 'nt' and not self.hidden:
+                    self._apply_windows_geometry(make_visible=True)
         else:
-          logger.debug(f"Stream: {self.name}: run_stream_watchdog: OK is responding ")
-      else:
-          logger.debug(f"Stream: {self.name}: run_stream_watchdog: was instructed to be stopped, not running watchdog")
+            logger.debug(f"Stream: {self.name}: run_stream_watchdog: was instructed to be stopped, not running watchdog")
+
     def start_stream(self, coordinates, hidden, rotate90):
         self.rotate90 = rotate90
         if self.rotate90:
@@ -291,13 +445,16 @@ class Stream:
                         {int(self.rotate90)}'
 
         else:
-            self.command_line = f'/usr/bin/mpv \
+            hidpi_option = "--hidpi-window-scale=no" if os.name == 'nt' else ""
+            window_state_option = "--window-minimized=yes" if os.name != 'nt' else ""
+            self.command_line = f'{self.mpv_binary} \
                         --video-aspect-override=\'{self._get_aspect_ratio_from_coordinates()}\' \
                         --title=\'{self.name}\' \
                         { self.mpv_loop } \
                         --no-border \
+                        { hidpi_option } \
                         --video-rotate=\'{self.mpv_video_rotate}\' \
-                        --window-minimized=yes \
+                        { window_state_option } \
                         --no-input-default-bindings \
                         --no-input-builtin-bindings \
                         --no-osc \
@@ -313,10 +470,22 @@ class Stream:
         logger.debug(f"Stream: {self.name}: start_stream: with commandline {str(self.command_line_shlex)}")
         self.env_with_display = os.environ.copy()
         self.env_with_display['DISPLAY'] = str(self.xdisplay_id)
-        self.streamprocess = subprocess.Popen(self.command_line_shlex, preexec_fn=os.setsid, stdin=subprocess.PIPE,env=self.env_with_display)
+        # On Windows os.setsid is unavailable; use CREATE_NEW_PROCESS_GROUP so later termination works reliably.
+        preexec_fn = os.setsid if hasattr(os, 'setsid') else None
+        creationflags = subprocess.CREATE_NEW_PROCESS_GROUP if os.name == 'nt' else 0
+        self.streamprocess = subprocess.Popen(
+            self.command_line_shlex,
+            preexec_fn=preexec_fn,
+            creationflags=creationflags,
+            stdin=subprocess.PIPE,
+            env=self.env_with_display,
+        )
+        logger.debug(
+            f"Stream: {self.name}: start_stream: spawned pid {self.streamprocess.pid} using binary {self.command_line_shlex[0]}"
+        )
 
         self._wait_for_window_to_be_initialized()
-
+        self._apply_windows_geometry(make_visible=not self.hidden)
 
         if self.showontop and not self.hidden:
             logger.debug(f"Stream: {self.name}: start_stream on top of the other streams")
@@ -338,12 +507,14 @@ class Stream:
         logger.debug(f"Stream: {self.name}: stop_stream")
         #At startup streamprocess is not known yet
         if self.streamprocess != None:
-          # This kill the process group so including all children
-          try:
-            os.killpg(os.getpgid(self.streamprocess.pid), signal.SIGKILL)
-          except ProcessLookupError:
-            logger.debug(f"Stream: {self.name}: stop_stream: The process group or process is already gone")
-            # The process group or process is already gone
-            pass
-          self.streamprocess.wait()
+            # This kills the process group (Linux) or the root process (Windows)
+            try:
+                if hasattr(os, 'killpg'):
+                    os.killpg(os.getpgid(self.streamprocess.pid), signal.SIGKILL)
+                else:
+                    self.streamprocess.terminate()
+            except ProcessLookupError:
+                logger.debug(f"Stream: {self.name}: stop_stream: The process group or process is already gone")
+                pass
+            self.streamprocess.wait()
         self.stream_started= False

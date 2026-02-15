@@ -20,6 +20,7 @@ class Screen:
         #Offsets for when on extended monitor
         self.monitor_x_offset = monitor["x_offset"]
         self.monitor_y_offset = monitor["y_offset"]
+        self.monitor_scale = float(monitor.get("dpi_scale", 1.0))
         #Screens by default start hidden
         self.hidden_state = True
         self.disable_probing_for_all_streams = screen_cfg.setdefault('disable_probing_for_all_streams', False)
@@ -60,7 +61,16 @@ class Screen:
         for stream in self.streams_cfg:
             counter = counter + 1
             stream_name = self.name + "_stream" + str(counter)
-            stream = Stream(stream_name, stream, self.background_drawinstance, self.xdisplay_id, self.monitor_number ,self.monitor_x_offset,self.monitor_y_offset)
+            stream = Stream(
+                stream_name,
+                stream,
+                self.background_drawinstance,
+                self.xdisplay_id,
+                self.monitor_number,
+                self.monitor_x_offset,
+                self.monitor_y_offset,
+                self.monitor_scale,
+            )
             self.all_streams.append(stream)
 
 

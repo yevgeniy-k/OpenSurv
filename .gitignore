@@ -65,3 +65,10 @@ target/
 .vscode
 
 *.log
+*.log.*
+
+.github/agents/
+
+surveillance/etc/monitor*.yml
+surveillance/etc/general.yml
+surveillance/images/*

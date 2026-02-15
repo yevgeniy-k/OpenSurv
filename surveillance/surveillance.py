@@ -1,35 +1,203 @@
 #!/usr/bin/python3
+import logging
 import signal
 import sys
 import time
-import Xlib.display
+
+if sys.platform == "win32":
+    import ctypes
+    import win32api
+    MDT_EFFECTIVE_DPI = 0
+else:
+    import Xlib.display
 
 from core.util.config import cfg
 from core.util.setuplogging import setup_logging
 from core.ScreenManager import ScreenManager
 
-def get_monitors():
-    display = Xlib.display.Display()
-    root = display.screen().root
 
+def _init_windows_dpi_awareness():
+    """Ensure Windows places child processes using physical pixels."""
+    if sys.platform != "win32":
+        return
+    try:
+        ctypes.windll.shcore.SetProcessDpiAwareness(2)
+    except AttributeError:
+        try:
+            ctypes.windll.user32.SetProcessDPIAware()
+        except Exception:
+            pass
+    except OSError:
+        # Fall back to older API if shcore call fails (pre-Windows 8.1).
+        try:
+            ctypes.windll.user32.SetProcessDPIAware()
+        except Exception:
+            pass
+
+
+def _get_monitor_dpi_scale(handle, hdc=None):
+    if sys.platform != "win32":
+        return 1.0
+
+    log = logging.getLogger('l_default')
+    try:
+        shcore = getattr(ctypes.windll, "shcore", None)
+
+        # Primary path: GetDpiForMonitor gives per-monitor DPI on Windows 8.1+
+        if shcore is not None:
+            dpi_x = ctypes.c_uint()
+            dpi_y = ctypes.c_uint()
+            result = shcore.GetDpiForMonitor(
+                ctypes.c_void_p(int(handle)),
+                MDT_EFFECTIVE_DPI,
+                ctypes.byref(dpi_x),
+                ctypes.byref(dpi_y),
+            )
+            if result == 0 and dpi_x.value:
+                return dpi_x.value / 96.0
+            log.warning("MAIN: GetDpiForMonitor failed for handle %s (code=%s)", handle, result)
+
+            # Older Windows builds expose GetScaleFactorForMonitor instead.
+            if hasattr(shcore, "GetScaleFactorForMonitor"):
+                scale_factor = ctypes.c_int()
+                legacy_result = shcore.GetScaleFactorForMonitor(
+                    ctypes.c_void_p(int(handle)),
+                    ctypes.byref(scale_factor),
+                )
+                if legacy_result == 0 and scale_factor.value:
+                    return float(scale_factor.value) / 100.0
+                log.warning(
+                    "MAIN: GetScaleFactorForMonitor failed for handle %s (code=%s)",
+                    handle,
+                    legacy_result,
+                )
+
+        # Fall back to system DPI so users at least get consistent scaling.
+        user32 = getattr(ctypes.windll, "user32", None)
+        if user32 is not None and hasattr(user32, "GetDpiForSystem"):
+            dpi = user32.GetDpiForSystem()
+            if dpi:
+                log.warning("MAIN: Falling back to GetDpiForSystem DPI=%s", dpi)
+                return dpi / 96.0
+
+        # Legacy fallback for environments missing newer APIs.
+        gdi32 = getattr(ctypes.windll, "gdi32", None)
+        if user32 is not None and gdi32 is not None:
+            desktop_hdc = user32.GetDC(0)
+            if desktop_hdc:
+                LOGPIXELSX = 88
+                dpi = gdi32.GetDeviceCaps(desktop_hdc, LOGPIXELSX)
+                user32.ReleaseDC(0, desktop_hdc)
+                if dpi:
+                    log.warning("MAIN: Falling back to GetDeviceCaps DPI=%s", dpi)
+                    return dpi / 96.0
+
+    except Exception as exc:
+        log.exception("MAIN: Unexpected DPI lookup failure: %s", exc)
+
+    if hdc is not None:
+        try:
+            import win32con
+            import win32gui
+
+            dpi = win32gui.GetDeviceCaps(hdc, win32con.LOGPIXELSX)
+            if dpi:
+                log.warning(
+                    "MAIN: Falling back to monitor HDC GetDeviceCaps DPI=%s for handle %s",
+                    dpi,
+                    handle,
+                )
+                return dpi / 96.0
+        except Exception as exc:
+            log.warning(
+                "MAIN: monitor HDC GetDeviceCaps fallback failed for handle %s: %s",
+                handle,
+                exc,
+            )
+
+    log.warning("MAIN: Unable to determine DPI for monitor handle %s, defaulting to scale 1.0", handle)
+    return 1.0
+
+def _monitor_allowed(monitor_id):
+    allowlist = cfg.get("advanced", {}).get("monitor_allowlist")
+    if not allowlist:
+        return True
+    return str(monitor_id) in {str(mid) for mid in allowlist}
+
+def get_monitors():
     monitor_list = []
-    monitor_counter = 0
-    # Iterate over the monitors and create dictionaries
-    for m in root.xrandr_get_monitors().monitors:
-        connector = display.get_atom_name(m.name)
-        monitor_dict = {
-            "xdisplay_id": ":0.0",
-            "monitor_id": connector,  # or use m.name if you want the name directly
-            "monitor_number": monitor_counter,
-            "resolution": {
-                "width": str(m.width_in_pixels),  # Convert to string as per your structure
-                "height": str(m.height_in_pixels)  # Convert to string as per your structure
-            },
-            "x_offset": str(m.x),  # Convert to string
-            "y_offset": str(m.y)  # Convert to string
-        }
-        monitor_list.append(monitor_dict)
-        monitor_counter += 1
+
+    if sys.platform == "win32":
+        for idx, (handle, _hdc, rect) in enumerate(win32api.EnumDisplayMonitors()):
+            left, top, right, bottom = rect
+            try:
+                handle_str = str(int(handle))
+            except (TypeError, ValueError):
+                handle_str = str(handle)
+            dpi_scale = _get_monitor_dpi_scale(handle, _hdc)
+            monitor_info = {
+                "xdisplay_id": "",  # DISPLAY not used on Windows
+                "monitor_id": handle_str,
+                "monitor_repr": str(handle),
+                "monitor_number": idx,
+                "resolution": {
+                    "width": str(right - left),
+                    "height": str(bottom - top)
+                },
+                "x_offset": str(left),
+                "y_offset": str(top),
+                "dpi_scale": dpi_scale,
+            }
+            if not _monitor_allowed(handle_str):
+                logger.info(
+                    "MAIN: get_monitors: skipping monitor %(monitor_repr)s due to monitor_allowlist",
+                    {"monitor_repr": monitor_info.get("monitor_repr", monitor_info["monitor_id"])}
+                )
+                continue
+            monitor_info["monitor_number"] = len(monitor_list)
+            monitor_list.append(monitor_info)
+    else:
+        display = Xlib.display.Display()
+        root = display.screen().root
+
+        # Iterate over the monitors and create dictionaries
+        for m in root.xrandr_get_monitors().monitors:
+            connector = display.get_atom_name(m.name)
+            monitor_dict = {
+                "xdisplay_id": ":0.0",
+                "monitor_id": connector,  # or use m.name if you want the name directly
+                "resolution": {
+                    "width": str(m.width_in_pixels),  # Convert to string as per your structure
+                    "height": str(m.height_in_pixels)  # Convert to string as per your structure
+                },
+                "x_offset": str(m.x),  # Convert to string
+                "y_offset": str(m.y)  # Convert to string
+            }
+            if not _monitor_allowed(connector):
+                logger.info(
+                    "MAIN: get_monitors: skipping monitor %(monitor_id)s due to monitor_allowlist",
+                    {"monitor_id": connector},
+                )
+                continue
+            monitor_dict["monitor_number"] = len(monitor_list)
+            monitor_list.append(monitor_dict)
+
+    if not monitor_list:
+        logger.warning("MAIN: get_monitors: no monitors detected")
+    else:
+        for monitor in monitor_list:
+            logger.info(
+                "MAIN: get_monitors: available monitor %(monitor_number)s %(monitor_id)s "
+                "%(width)sx%(height)s offset(%(x)s,%(y)s)",
+                {
+                    "monitor_number": monitor.get("monitor_number"),
+                    "monitor_id": monitor.get("monitor_id"),
+                    "width": monitor.get("resolution", {}).get("width"),
+                    "height": monitor.get("resolution", {}).get("height"),
+                    "x": monitor.get("x_offset"),
+                    "y": monitor.get("y_offset"),
+                },
+            )
     logger.debug(f"MAIN: get_monitors: detected {monitor_list}")
     return monitor_list
 
@@ -73,6 +241,7 @@ if __name__ == '__main__':
 
     #Setup logger
     logger = setup_logging()
+    _init_windows_dpi_awareness()
 
     fullversion_for_installer = "1.3"
 
@@ -85,6 +254,13 @@ if __name__ == '__main__':
 
     #Detect displays attached and their config
     monitors=get_monitors()
+
+    if not monitors:
+        logger.error(
+            "MAIN: no monitors available after applying monitor_allowlist=%s. Exiting.",
+            cfg.get("advanced", {}).get("monitor_allowlist"),
+        )
+        sys.exit(1)
 
     screenmanagers=[]
     count=0
