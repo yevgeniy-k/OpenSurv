@@ -4,6 +4,17 @@ advanced:
   #You can disable this if you want to save resources versus slower rotation to next screen in case you have multiple screens
   #enable_caching_next_screen: True
 
+  #Optional: restrict which detected monitors to use (by ID)
+  #On Linux these are connector names from Xrandr (e.g. HDMI-0, DP-1)
+  #On Windows these are monitor handles as strings (from EnumDisplayMonitors)
+  #monitor_allowlist: []
+
+  #Optional: override mpv executable (e.g. portable build to avoid OS-specific wrappers)
+  #mpv_path: "/path/to/mpv"
+
+  #Optional: override ffprobe executable path (useful on Windows, e.g. C:\\ffmpeg\\bin\\ffprobe.exe)
+  #ffprobe_path: "C:/ffmpeg/bin/ffprobe.exe"
+
   #By default opensurv checks every 15 seconds if all cameras on the current active screen are still connectable or if unconnectable become connectable
   #If there is a change in connectable/unconnectable screens opensurv will update the screen with the new situation
   #In the case of dual displays, it does check this independently every interval_check_status seconds for both active screens (2 screens are active on dual displays setup)

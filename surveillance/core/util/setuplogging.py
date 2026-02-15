@@ -11,7 +11,7 @@ def setup_logging(logfilepath = None,loggername=None):
         if exception.errno != errno.EEXIST:
             raise
 
-    with open("../etc/logging.yml", 'r') as ymlfile:
+    with open(os.path.join("etc", "logging.yml"), 'r') as ymlfile:
         logcfg = yaml.safe_load(ymlfile)
 
     #Override some contents of config yaml file if needed

@@ -1,6 +1,8 @@
 import logging
+import os
 import yaml
 import subprocess
+import sys
 
 from .Screen import Screen
 from core.util.draw import Draw
@@ -30,12 +32,20 @@ class ScreenManager:
 
     def _fetch_display_config(self):
         #xdisplay_id is in the form of :0.0 we need last one to know which display
-        configpath=f"../etc/monitor{int(self.monitor['monitor_number'])+1}.yml"
+        configpath=os.path.join("etc", f"monitor{int(self.monitor['monitor_number'])+1}.yml")
         logger.debug(f"ScreenManager: {self.name}: Looking for config file {configpath}")
-        with open(configpath, 'r') as ymlfile:
-            cfg = yaml.safe_load(ymlfile)
-            self.screens_cfg=cfg['essentials']['screens']
-            self.disable_autorotation = cfg['essentials'].setdefault('disable_autorotation', False)
+        try:
+            with open(configpath, 'r') as ymlfile:
+                cfg = yaml.safe_load(ymlfile) or {}
+            essentials = cfg["essentials"]
+            self.screens_cfg = essentials['screens']
+            self.disable_autorotation = essentials.setdefault('disable_autorotation', False)
+        except FileNotFoundError:
+            logger.error(f"ScreenManager: {self.name}: Config file {configpath} not found; exiting")
+            sys.exit(1)
+        except (yaml.YAMLError, KeyError, TypeError) as exc:
+            logger.error(f"ScreenManager: {self.name}: Invalid config file {configpath}: {exc}; exiting")
+            sys.exit(1)
 
     def _create_cached_screen(self):
 
@@ -172,6 +182,9 @@ class ScreenManager:
         logger.debug(f"ScreenManager: {self.name}: rotate_next: indexes AFTER rotate: futurecacheindex: {self.futurecacheindex} activeindex: {self.activeindex} max index is {self.max_index}")
 
     def focus_background_pygame(self):
+        if sys.platform == "win32":
+            logger.debug(f"ScreenManager: {self.name}: focus_background_pygame skipped on Windows")
+            return
         try:
             # Get the list of windows using wmctrl
             wmctrl_output = subprocess.check_output(['wmctrl', '-l']).decode('utf-8')

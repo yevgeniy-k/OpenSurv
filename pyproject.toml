@@ -1,0 +1,19 @@
+[tool.poetry]
+name = "opensurv"
+version = "1.3.0"
+description = "Open source surveillance viewer and watchdog."
+readme = "README.md"
+authors = ["OpenSurv"]
+license = "GPL-2.0-only"
+packages = [{ include = "surveillance" }]
+
+[tool.poetry.dependencies]
+python = ">=3.8,<4.0"
+PyYAML = "^6.0"
+pygame = "^2.5.2"
+python-xlib = {version = "^0.33", markers = "sys_platform != 'win32'"}
+pywin32 = {version = "^306", markers = "sys_platform == 'win32'"}
+
+[build-system]
+requires = ["poetry-core>=1.8.0"]
+build-backend = "poetry.core.masonry.api"
