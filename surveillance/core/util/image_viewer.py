@@ -9,6 +9,8 @@ import sys
 import io
 import os
 import urllib.request
+from urllib.parse import urlparse
+from urllib.request import url2pathname
 from setuplogging import setup_logging
 
 # Initialize Pygame
@@ -35,7 +37,7 @@ image_source = sys.argv[7]
 window_title = sys.argv[8]
 rotate90 = int(sys.argv[9])
 
-logger = setup_logging(f"../logs/image_viewer_{window_title}.log", __name__)
+logger = setup_logging(os.path.join(os.pardir, "logs", f"image_viewer_{window_title}.log"), __name__)
 logger.debug(f"image_viewer_{window_title} starting with arguments {x1}, {y1}, {x2}, {y2}, {x_offset}, {y_offset}, {image_source}, {window_title}, {rotate90}")
 
 # Explanation of coordinates:
@@ -63,7 +65,7 @@ pygame.mouse.set_visible(False)
 
 # Set the window title
 pygame.display.set_caption(window_title)
-
+ 
 def load_image():
     """Attempt to load the image and handle errors."""
     try:
@@ -74,7 +76,7 @@ def load_image():
             img = pygame.image.load(image_file)
         elif image_source.startswith("file://"):
             # Load image from local file path
-            local_path = image_source[7:]  # Remove the "file://" prefix
+            local_path = url2pathname(urlparse(image_source).path)
             img = pygame.image.load(local_path)
         else:
             logger.debug(f"image_viewer_{window_title} Error: Image source must start with 'http://', 'https://', or 'file://'")

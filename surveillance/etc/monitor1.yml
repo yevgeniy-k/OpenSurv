@@ -14,50 +14,20 @@ essentials:
 #      #######################################################################################################
 
     - streams:
-        - url: "file:///home/opensurv/lib/demo/resources/Big_Buck_Bunny_Trailer_fast_480p30.m4v"
-          force_coordinates: [0, 0, 1920, 1080]
-        - url: "file:///home/opensurv/lib/demo/resources/Big_Buck_Bunny_Trailer_fast_480p30.m4v"
-          force_coordinates: [100, 100, 700, 500]
-          showontop: True
-      duration: 20
-    - streams:
-        - url: "file:///home/opensurv/lib/demo/resources/demo.png"
-          force_coordinates: [600, 0, 1920, 800]
-          imageurl: true
-        - url: "file:///home/opensurv/lib/demo/resources/Big_Buck_Bunny_Trailer_fast_480p30.m4v"
-          force_coordinates: [1600, 100, 1900, 200]
-          showontop: True
-        - url: "file:///home/opensurv/lib/demo/resources/Big_Buck_Bunny_Trailer_fast_480p30.m4v"
-          force_coordinates: [0, 0, 600, 400]
-        - url: "file:///home/opensurv/lib/demo/resources/demo.png"
-          imageurl: true
-          force_coordinates: [0, 400, 600, 800]
-        - url: "file:///home/opensurv/lib/demo/resources/Big_Buck_Bunny_Trailer_fast_480p30.m4v"
-          force_coordinates: [0, 800, 600, 1080]
-        - url: "file:///home/opensurv/lib/demo/resources/demo.png"
-          imageurl: true
-          force_coordinates: [600, 800, 1260, 1080]
-        - url: "file:///home/opensurv/lib/demo/resources/Big_Buck_Bunny_Trailer_fast_480p30.m4v"
-          force_coordinates: [1260, 800, 1920, 1080]
-      duration: 20
-    - streams:
-        - url: "file:///home/opensurv/lib/demo/resources/Big_Buck_Bunny_Trailer_fast_480p30.m4v"
-        - url: "file:///home/opensurv/lib/demo/resources/demo.png"
-          imageurl: true
-        - url: "file:///home/opensurv/lib/demo/resources/demo.png"
-          imageurl: true
-        - url: "file:///home/opensurv/lib/demo/resources/Big_Buck_Bunny_Trailer_fast_480p30.m4v"
-      duration: 30
-      nr_of_columns: 2
-    - streams:
-        - url: "file:///home/opensurv/lib/demo/resources/demo.png"
-          imageurl: true
-        - url: "file:///home/opensurv/lib/demo/resources/Big_Buck_Bunny_Trailer_fast_480p30.m4v"
-        - url: "file:///home/opensurv/lib/demo/resources/Big_Buck_Bunny_Trailer_fast_480p30.m4v"
-        - url: "file:///home/opensurv/lib/demo/resources/demo.png"
-          imageurl: true
-      duration: 20
-      nr_of_columns: 2
+        - url: "rtsp://192.168.69.50:8554/garage"
+          freeform_advanced_mpv_options: "--profile=low-latency --untimed --rtsp-transport=udp  --no-cache --no-audio"
+        # - url: "rtsp://192.168.69.50:8554/doorbell"
+        #   freeform_advanced_mpv_options: "--profile=low-latency --untimed --rtsp-transport=tcp --demuxer-lavf-o-add=fflags=+nobuffer --no-cache --no-audio"
+        - url: "rtsp://192.168.69.50:8554/doorbell"
+          freeform_advanced_mpv_options: "--profile=low-latency --untimed --rtsp-transport=udp  --no-cache --no-audio"
+        - url: "rtsp://192.168.69.50:8554/deck"
+          freeform_advanced_mpv_options: "--profile=low-latency --untimed --rtsp-transport=udp  --no-cache --no-audio"
+        - url: "rtsp://192.168.69.50:8554/backyard"
+          freeform_advanced_mpv_options: "--profile=low-latency --untimed --rtsp-transport=udp  --no-cache --no-audio"
+        # - url: "rtsp://192.168.69.50:8554/backyard"
+        #   freeform_advanced_mpv_options: "--profile=low-latency --untimed --rtsp-transport=tcp --demuxer-lavf-o-add=fflags=+nobuffer --no-cache --no-audio"
+          
+       
 
 
 #      #######################################################################################################
@@ -83,6 +53,8 @@ essentials:
 #    - streams:
 #          #Dlink dcs-5222l example
 #        - url: "rtsp://<user>:<password>@<ip or dnsname>:<port>/play1.sdp"
+#          #SRT example (replace parameters as needed)
+#        - url: "srt://<ip or dnsname>:<port>?streamid=<your_stream_id>"
 #
 #          #OPTIONAL AND ADVANCED PER CAMERASTREAM/URL OPTIONS:
 #
