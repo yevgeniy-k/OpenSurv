@@ -2,6 +2,7 @@
 import signal
 import sys
 import time
+import datetime
 import Xlib.display
 
 from core.util.config import cfg
@@ -71,8 +72,9 @@ if __name__ == '__main__':
 
     signal.signal(signal.SIGTERM, sigterm_handler)
 
-    #Setup logger
-    logger = setup_logging()
+    #Setup logger with a session-specific log file so previous sessions are preserved
+    session_timestamp = datetime.datetime.now().strftime('%Y%m%d_%H%M%S')
+    logger = setup_logging(logfilepath=f"../logs/session_{session_timestamp}.log")
 
     fullversion_for_installer = "1.3"
 
